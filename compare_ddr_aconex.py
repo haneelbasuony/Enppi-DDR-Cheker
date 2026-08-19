@@ -108,7 +108,7 @@ PLIP_COL_PLIP_ID = "PLIP_ID"
 
 SQL_SERVER = "ES-MSSQL-01"
 SQL_DATABASE = "ACONEX Reporting Data"
-SQL_TABLE = "DocumentRegisterTest"
+SQL_TABLE = "DocumentRegister"
 
 ACONEX_COL_DOC_NUMBER = "DocNo"
 ACONEX_COL_TITLE = "Title"
@@ -124,13 +124,45 @@ AREA_CODE_ALLOWED = {"BIR"}
 PROCESS_UNIT_ALLOWED = {"36"}
 
 ORIGINATOR_CODES = {
-    "000000", "102396", "102961", "103440", "104262", "104332", "107625",
+    "000000",
+    "102396",
+    "102961",
+    "103440",
+    "104262",
+    "104332",
+    "107625",
+    "104265",
 }
 
 DISCIPLINE_CODES = {
-    "AA", "BA", "CS", "EA", "FD", "HX", "IC", "IN", "JA", "KA", "LA", "MH",
-    "MP", "MR", "MS", "NA", "OA", "PX", "QA", "RA", "SA", "TA", "VA", "ZP",
-    "ZR", "ZT", "ZV", "ZW",
+    "AA",
+    "BA",
+    "CS",
+    "EA",
+    "FD",
+    "HX",
+    "IC",
+    "IN",
+    "JA",
+    "KA",
+    "LA",
+    "MH",
+    "MP",
+    "MR",
+    "MS",
+    "NA",
+    "OA",
+    "PX",
+    "QA",
+    "RA",
+    "SA",
+    "TA",
+    "VA",
+    "ZP",
+    "ZR",
+    "ZT",
+    "ZV",
+    "ZW",
 }
 
 DOCUMENT_TYPE_CODES = set("""
@@ -175,9 +207,8 @@ P00 P01 P02 P03 P04 P05 P06 P07 P08 P09 P10 P11 P12 P13 P14 P15 P16 P17
 P18 P19 P20 P21 P22 P23 2394
 """.split())
 
-SEQ_NO_RE = re.compile(r"^\d{5}$")   # Sequential No. -> 5 numeric digits
+SEQ_NO_RE = re.compile(r"^\d{5}$")  # Sequential No. -> 5 numeric digits
 SHEET_NO_RE = re.compile(r"^\d{4}$")  # Sheet No.      -> 4 numeric digits
-
 
 
 def validate_taxonomy(doc_number: str):
@@ -224,6 +255,7 @@ def validate_taxonomy(doc_number: str):
 # HELPERS
 # ==========================================================================
 
+
 def matches_doc_number_plip_pattern(doc_number, plip_id):
     """
     Checks whether the PLIP ID format corresponds to the
@@ -252,20 +284,14 @@ def matches_doc_number_plip_pattern(doc_number, plip_id):
         doc_type = parts[4].strip().upper()
 
         expected_pattern = (
-            f"^{re.escape(discipline)}"
-            f"{re.escape(doc_type)}"
-            r"-\d{2}$"
+            f"^{re.escape(discipline)}" f"{re.escape(doc_type)}" r"-\d{2}$"
         )
 
-        return bool(
-            re.match(
-                expected_pattern,
-                str(plip_id).strip().upper()
-            )
-        )
+        return bool(re.match(expected_pattern, str(plip_id).strip().upper()))
 
     except Exception:
         return False
+
 
 def norm(value):
     """Normalize a value for comparison: strip whitespace, uppercase, and
@@ -292,9 +318,11 @@ def find_header_row(path, sheet_name, required_cols, scan_rows=25):
     """Scans the first `scan_rows` rows of the sheet (no header assumed) and
     returns the 0-indexed row number that best matches the required column
     names, or None if nothing scores well."""
-    raw = pd.read_excel(
-        path, sheet_name=sheet_name, header=None, nrows=scan_rows
-    ) if sheet_name else pd.read_excel(path, header=None, nrows=scan_rows)
+    raw = (
+        pd.read_excel(path, sheet_name=sheet_name, header=None, nrows=scan_rows)
+        if sheet_name
+        else pd.read_excel(path, header=None, nrows=scan_rows)
+    )
 
     required_norm = [c.strip().upper() for c in required_cols]
 
@@ -312,14 +340,18 @@ def find_header_row(path, sheet_name, required_cols, scan_rows=25):
     return None, raw
 
 
-def load_sheet(path, sheet_name, required_cols, label, header_row=None, scan_rows=HEADER_SCAN_ROWS):
+def load_sheet(
+    path, sheet_name, required_cols, label, header_row=None, scan_rows=HEADER_SCAN_ROWS
+):
     try:
         if header_row is None:
-            detected_row, raw_preview = find_header_row(path, sheet_name, required_cols, scan_rows)
+            detected_row, raw_preview = find_header_row(
+                path, sheet_name, required_cols, scan_rows
+            )
             if detected_row is None:
                 preview = raw_preview.head(scan_rows).to_string()
                 raise Exception(
-                    f"ERROR: could not auto-detect the header row in the {label} file " 
+                    f"ERROR: could not auto-detect the header row in the {label} file "
                     f"within the first {scan_rows} rows.\n"
                     f"Expected columns (or close matches): {required_cols}\n\n"
                     f"Preview of '{path}':\n{preview}\n\n"
@@ -330,8 +362,11 @@ def load_sheet(path, sheet_name, required_cols, label, header_row=None, scan_row
             header_row = detected_row
             print(f"[{label}] Auto-detected header row: {header_row} (0-indexed)")
 
-        df = pd.read_excel(path, sheet_name=sheet_name, header=header_row) if sheet_name \
+        df = (
+            pd.read_excel(path, sheet_name=sheet_name, header=header_row)
+            if sheet_name
             else pd.read_excel(path, header=header_row)
+        )
     except FileNotFoundError:
         raise Exception(f"ERROR: {label} file not found: {path}")
     except SystemExit:
@@ -340,7 +375,11 @@ def load_sheet(path, sheet_name, required_cols, label, header_row=None, scan_row
         raise Exception(f"ERROR: could not read {label} file '{path}': {e}")
 
     # Drop fully-blank / "Unnamed" columns that sometimes trail real data
-    df = df.loc[:, ~df.columns.astype(str).str.match(r"^Unnamed.*$") | df.columns.isin(required_cols)]
+    df = df.loc[
+        :,
+        ~df.columns.astype(str).str.match(r"^Unnamed.*$")
+        | df.columns.isin(required_cols),
+    ]
 
     missing = [c for c in required_cols if c not in df.columns]
     if missing:
@@ -351,6 +390,7 @@ def load_sheet(path, sheet_name, required_cols, label, header_row=None, scan_row
             f"column name constants, or set the *_HEADER_ROW value explicitly."
         )
     return df
+
 
 def load_aconex_from_sql():
     """
@@ -383,32 +423,24 @@ def load_aconex_from_sql():
         conn.close()
 
     except Exception as e:
-        raise Exception(
-            f"ERROR: Failed to load Aconex Register from SQL Server.\n{e}"
-        )
+        raise Exception(f"ERROR: Failed to load Aconex Register from SQL Server.\n{e}")
 
     required_cols = [
         ACONEX_COL_DOC_NUMBER,
         ACONEX_COL_TITLE,
         ACONEX_COL_REVIEW_STATUS,
-        ACONEX_COL_FILE_NAME
+        ACONEX_COL_FILE_NAME,
     ]
 
-    missing = [
-        c for c in required_cols
-        if c not in df.columns
-    ]
+    missing = [c for c in required_cols if c not in df.columns]
 
     if missing:
-        raise Exception(
-            f"ERROR: SQL table '{SQL_TABLE}' is missing columns: {missing}"
-        )
+        raise Exception(f"ERROR: SQL table '{SQL_TABLE}' is missing columns: {missing}")
 
-    print(
-        f"[Aconex SQL] Loaded {len(df):,} records from SQL Server"
-    )
+    print(f"[Aconex SQL] Loaded {len(df):,} records from SQL Server")
 
     return df
+
 
 # ==========================================================================
 # MAIN
@@ -433,20 +465,11 @@ def main(ddr_path=None, plip_path=None, out_path=None):
             description="Compare DDR vs PLIP vs Aconex register"
         )
 
-        parser.add_argument(
-            "--ddr",
-            default=DEFAULT_DDR_PATH
-        )
+        parser.add_argument("--ddr", default=DEFAULT_DDR_PATH)
 
-        parser.add_argument(
-            "--plip",
-            default=DEFAULT_PLIP_PATH
-        )
+        parser.add_argument("--plip", default=DEFAULT_PLIP_PATH)
 
-        parser.add_argument(
-            "--out",
-            default=DEFAULT_OUTPUT_PATH
-        )
+        parser.add_argument("--out", default=DEFAULT_OUTPUT_PATH)
 
         args = parser.parse_args()
 
@@ -455,13 +478,17 @@ def main(ddr_path=None, plip_path=None, out_path=None):
         out_path = args.out
 
     ddr_df = load_sheet(
-        ddr_path, DDR_SHEET_NAME,
-        [DDR_COL_DOC_NUMBER, DDR_COL_TITLE, DDR_COL_PLIP_ID], "DDR",
+        ddr_path,
+        DDR_SHEET_NAME,
+        [DDR_COL_DOC_NUMBER, DDR_COL_TITLE, DDR_COL_PLIP_ID],
+        "DDR",
         header_row=DDR_HEADER_ROW,
     )
     plip_df = load_sheet(
-        plip_path, PLIP_SHEET_NAME,
-        [PLIP_COL_PLIP_ID], "PLIP SPO",
+        plip_path,
+        PLIP_SHEET_NAME,
+        [PLIP_COL_PLIP_ID],
+        "PLIP SPO",
         header_row=PLIP_HEADER_ROW,
     )
     aconex_df = load_aconex_from_sql()
@@ -477,16 +504,11 @@ def main(ddr_path=None, plip_path=None, out_path=None):
         aconex_lookup[row["_key"]] = {
             "title": row[ACONEX_COL_TITLE],
             "review_status": row[ACONEX_COL_REVIEW_STATUS],
-            "file_name": row[ACONEX_COL_FILE_NAME]
+            "file_name": row[ACONEX_COL_FILE_NAME],
         }
-    
-    # Build a set of all document numbers currently present in the DDR
-    ddr_doc_numbers = {
-        norm(v)
-        for v in ddr_df[DDR_COL_DOC_NUMBER]
-        if norm(v)
-    }
 
+    # Build a set of all document numbers currently present in the DDR
+    ddr_doc_numbers = {norm(v) for v in ddr_df[DDR_COL_DOC_NUMBER] if norm(v)}
 
     results = []
 
@@ -508,10 +530,7 @@ def main(ddr_path=None, plip_path=None, out_path=None):
 
         if norm(plip_id) not in plip_ids:
 
-            if matches_doc_number_plip_pattern(
-                doc_number,
-                plip_id
-            ):
+            if matches_doc_number_plip_pattern(doc_number, plip_id):
 
                 status = "InActive PLIP ID"
                 note = (
@@ -569,20 +588,19 @@ def main(ddr_path=None, plip_path=None, out_path=None):
 
                     status = "Title Mismatch - Update Title in Aconex"
 
-                    note = (
-                        f"DDR title: '{title}' | "
-                        f"Aconex title: '{aconex_title}'"
-                    )
+                    note = f"DDR title: '{title}' | " f"Aconex title: '{aconex_title}'"
 
-        results.append({
-            "Document Number": doc_number,
-            "Document Title (DDR)": title,
-            "PLIP ID": plip_id,
-            "Status": status,
-            "Review Status": review_status,
-            "Document Type": document_type,
-            "Notes": note,
-        })
+        results.append(
+            {
+                "Document Number": doc_number,
+                "Document Title (DDR)": title,
+                "PLIP ID": plip_id,
+                "Status": status,
+                "Review Status": review_status,
+                "Document Type": document_type,
+                "Notes": note,
+            }
+        )
 
     # ======================================================================
     # STEP 5 - FIND DOCUMENTS THAT EXIST IN ACONEX BUT NOT IN DDR
@@ -610,11 +628,7 @@ def main(ddr_path=None, plip_path=None, out_path=None):
             review_status = aconex_record["review_status"]
             file_name = aconex_record["file_name"]
 
-            review_status = (
-                ""
-                if pd.isna(review_status)
-                else str(review_status)
-            )
+            review_status = "" if pd.isna(review_status) else str(review_status)
 
             document_type = "Placeholder"
 
@@ -625,19 +639,20 @@ def main(ddr_path=None, plip_path=None, out_path=None):
                 except Exception:
                     pass
 
-            results.append({
-                "Document Number": aconex_doc_number,
-                "Document Title (DDR)": "",
-                "PLIP ID": "",
-                "Status": "Delete from Aconex Document Register",
-                "Review Status": review_status,
-                "Document Type": document_type,
-                "Notes": (
-                    f"Document exists in Aconex but is not present in the latest DDR. "
-                    f"Aconex title: '{aconex_title}'"
-                ),
-            })
-
+            results.append(
+                {
+                    "Document Number": aconex_doc_number,
+                    "Document Title (DDR)": "",
+                    "PLIP ID": "",
+                    "Status": "Delete from Aconex Document Register",
+                    "Review Status": review_status,
+                    "Document Type": document_type,
+                    "Notes": (
+                        f"Document exists in Aconex but is not present in the latest DDR. "
+                        f"Aconex title: '{aconex_title}'"
+                    ),
+                }
+            )
 
     out_df = pd.DataFrame(results)
 
@@ -683,11 +698,7 @@ def create_summary_sheet(path: Path):
 
     ws["A1"] = "DDR Comparison Dashboard"
 
-    ws["A1"].font = Font(
-        bold=True,
-        size=16,
-        color="1F1F1F"
-    )
+    ws["A1"].font = Font(bold=True, size=16, color="1F1F1F")
 
     ws["A1"].alignment = Alignment(horizontal="center")
 
@@ -696,17 +707,9 @@ def create_summary_sheet(path: Path):
     # ==========================================================
     df = pd.read_excel(path, sheet_name="DDR Comparison")
 
-    status_counts = (
-        df["Status"]
-        .value_counts()
-        .to_dict()
-    )
+    status_counts = df["Status"].value_counts().to_dict()
 
-    sorted_statuses = sorted(
-        status_counts.items(),
-        key=lambda x: x[1],
-        reverse=True
-    )
+    sorted_statuses = sorted(status_counts.items(), key=lambda x: x[1], reverse=True)
 
     # ==========================================================
     # TABLE HEADER
@@ -716,16 +719,10 @@ def create_summary_sheet(path: Path):
     ws.cell(header_row, 1, "Status")
 
     header_fill = PatternFill(
-        start_color="5B9BD5",
-        end_color="5B9BD5",
-        fill_type="solid"
+        start_color="5B9BD5", end_color="5B9BD5", fill_type="solid"
     )
 
-    header_font = Font(
-        bold=True,
-        color="FFFFFF",
-        size=11
-    )
+    header_font = Font(bold=True, color="FFFFFF", size=11)
 
     for cell in ws[header_row]:
         cell.fill = header_fill
@@ -737,26 +734,19 @@ def create_summary_sheet(path: Path):
     # ==========================================================
     start_row = 4
 
-    band_fill = PatternFill(
-        start_color="F7F7F7",
-        end_color="F7F7F7",
-        fill_type="solid"
-    )
+    band_fill = PatternFill(start_color="F7F7F7", end_color="F7F7F7", fill_type="solid")
 
     SUMMARY_STATUS_COLORS = {
-    "OK - No Corrective Action Required": "C6EFCE",
-    "Title Mismatch - Update Title in Aconex": "FFEB9C",
-    "Placeholder Required - Create in Aconex": "FFD8A8",
-    "Placeholder Required - INVALID Doc Number Taxonomy": "FFC7CE",
-    "PLIP ID Not Found": "D9D9D9",
-    "InActive PLIP ID": "FFF2CC",
-    "Delete from Aconex Document Register": "F4CCCC",
+        "OK - No Corrective Action Required": "C6EFCE",
+        "Title Mismatch - Update Title in Aconex": "FFEB9C",
+        "Placeholder Required - Create in Aconex": "FFD8A8",
+        "Placeholder Required - INVALID Doc Number Taxonomy": "FFC7CE",
+        "PLIP ID Not Found": "D9D9D9",
+        "InActive PLIP ID": "FFF2CC",
+        "Delete from Aconex Document Register": "F4CCCC",
     }
-    
-    for idx, (status, count) in enumerate(
-        sorted_statuses,
-        start=start_row
-    ):
+
+    for idx, (status, count) in enumerate(sorted_statuses, start=start_row):
 
         ws.cell(idx, 1, status)
         ws.cell(idx, 2, count)
@@ -764,11 +754,7 @@ def create_summary_sheet(path: Path):
         color = SUMMARY_STATUS_COLORS.get(status)
 
         if color:
-            fill = PatternFill(
-                start_color=color,
-                end_color=color,
-                fill_type="solid"
-            )
+            fill = PatternFill(start_color=color, end_color=color, fill_type="solid")
 
             ws.cell(idx, 1).fill = fill
             ws.cell(idx, 2).fill = fill
@@ -805,10 +791,7 @@ def create_summary_sheet(path: Path):
     )
 
     for row in ws.iter_rows(
-        min_row=header_row,
-        max_row=total_row,
-        min_col=1,
-        max_col=2
+        min_row=header_row, max_row=total_row, min_col=1, max_col=2
     ):
         for cell in row:
             cell.border = thin_border
@@ -842,19 +825,9 @@ def create_summary_sheet(path: Path):
 
     last_data_row = start_row + len(sorted_statuses) - 1
 
-    data = Reference(
-        ws,
-        min_col=2,
-        min_row=header_row,
-        max_row=last_data_row
-    )
+    data = Reference(ws, min_col=2, min_row=header_row, max_row=last_data_row)
 
-    categories = Reference(
-        ws,
-        min_col=1,
-        min_row=start_row,
-        max_row=last_data_row
-    )
+    categories = Reference(ws, min_col=1, min_row=start_row, max_row=last_data_row)
 
     chart.add_data(data, titles_from_data=True)
     chart.set_categories(categories)
@@ -881,11 +854,7 @@ def create_summary_sheet(path: Path):
             f"'{top_two[0]}' ({top_two[1]})"
         )
 
-        ws["D22"].font = Font(
-            bold=True,
-            size=12,
-            color="44546A"
-        )
+        ws["D22"].font = Font(bold=True, size=12, color="44546A")
 
     # ==========================================================
     # OPEN ON SUMMARY TAB
@@ -893,14 +862,17 @@ def create_summary_sheet(path: Path):
     wb.active = 0
 
     wb.save(path)
-    
+
+
 def style_output(path: Path):
     """Colour-codes the Status column, bolds the header, and auto-fits columns."""
     wb = load_workbook(path)
     ws = wb["DDR Comparison"]
 
     header_font = Font(bold=True, color="FFFFFF")
-    header_fill = PatternFill(start_color="404040", end_color="404040", fill_type="solid")
+    header_fill = PatternFill(
+        start_color="404040", end_color="404040", fill_type="solid"
+    )
 
     headers = [cell.value for cell in ws[1]]
     status_col_idx = headers.index("Status") + 1 if "Status" in headers else None
@@ -911,15 +883,21 @@ def style_output(path: Path):
         cell.alignment = Alignment(horizontal="center", vertical="center")
 
     if status_col_idx:
-        for row in ws.iter_rows(min_row=2, min_col=status_col_idx, max_col=status_col_idx):
+        for row in ws.iter_rows(
+            min_row=2, min_col=status_col_idx, max_col=status_col_idx
+        ):
             for cell in row:
                 color = STATUS_STYLES.get(cell.value)
                 if color:
-                    cell.fill = PatternFill(start_color=color, end_color=color, fill_type="solid")
+                    cell.fill = PatternFill(
+                        start_color=color, end_color=color, fill_type="solid"
+                    )
 
     # Auto-fit-ish column widths
     for col_cells in ws.columns:
-        length = max((len(str(c.value)) if c.value is not None else 0) for c in col_cells)
+        length = max(
+            (len(str(c.value)) if c.value is not None else 0) for c in col_cells
+        )
         col_letter = get_column_letter(col_cells[0].column)
         ws.column_dimensions[col_letter].width = min(max(length + 2, 12), 60)
 
