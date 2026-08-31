@@ -7,7 +7,6 @@ import threading
 
 from compare_ddr_aconex import main
 
-
 # ============================================================
 # SQL CONFIGURATION
 # ============================================================
@@ -15,7 +14,10 @@ from compare_ddr_aconex import main
 SQL_SERVER = "ES-MSSQL-01"
 SQL_DATABASE = "ACONEX Reporting Data"
 
-
+# ============================================================
+# REPORTS OUTPUT
+# ============================================================
+SHARED_OUTPUT_FOLDER = r"\\pd-file-srv-01\Docs\AIS\DMS\Aconex\Power BI\SQL-PowerBi Report\BUDOUR (5376200)\Data for Reports"
 # ============================================================
 # MAIN WINDOW
 # ============================================================
@@ -36,12 +38,14 @@ ENTRY_BG = "#2D2D30"
 
 root.configure(bg=BG)
 root.title("DDR vs ACONEX Validator")
-root.geometry("950x650")
+root.geometry("950x800")
 root.resizable(False, False)
 
 ddr_file = tk.StringVar()
 plip_file = tk.StringVar()
 output_folder = tk.StringVar()
+save_to_custom = tk.BooleanVar(value=True)
+save_to_shared = tk.BooleanVar(value=False)
 
 status_text = tk.StringVar(value="Ready")
 
@@ -55,11 +59,7 @@ try:
     img = img.resize((220, 80))
     logo = ImageTk.PhotoImage(img)
 
-    logo_label = tk.Label(
-        root,
-        image=logo,
-        bg=BG
-    )
+    logo_label = tk.Label(root, image=logo, bg=BG)
     logo_label.pack(pady=(10, 5))
 
 except Exception:
@@ -71,11 +71,7 @@ except Exception:
 # ============================================================
 
 title_label = tk.Label(
-    root,
-    text="DDR vs ACONEX VALIDATOR",
-    font=("Segoe UI", 22, "bold"),
-    bg=BG,
-    fg=TEXT
+    root, text="DDR vs ACONEX VALIDATOR", font=("Segoe UI", 22, "bold"), bg=BG, fg=TEXT
 )
 
 title_label.pack(pady=(10, 20))
@@ -84,6 +80,7 @@ title_label.pack(pady=(10, 20))
 # ============================================================
 # FUNCTIONS
 # ============================================================
+
 
 def create_button(parent, text, command, color):
 
@@ -97,15 +94,15 @@ def create_button(parent, text, command, color):
         cursor="hand2",
         activebackground=color,
         activeforeground="white",
-        font=("Segoe UI", 9, "bold")
+        font=("Segoe UI", 9, "bold"),
     )
 
     return btn
 
+
 def browse_ddr():
     path = filedialog.askopenfilename(
-        title="Select DDR File",
-        filetypes=[("Excel Files", "*.xlsx *.xls")]
+        title="Select DDR File", filetypes=[("Excel Files", "*.xlsx *.xls")]
     )
 
     if path:
@@ -114,8 +111,7 @@ def browse_ddr():
 
 def browse_plip():
     path = filedialog.askopenfilename(
-        title="Select PLIP File",
-        filetypes=[("Excel Files", "*.xlsx *.xls")]
+        title="Select PLIP File", filetypes=[("Excel Files", "*.xlsx *.xls")]
     )
 
     if path:
@@ -123,9 +119,7 @@ def browse_plip():
 
 
 def browse_output():
-    path = filedialog.askdirectory(
-        title="Select Output Folder"
-    )
+    path = filedialog.askdirectory(title="Select Output Folder")
 
     if path:
         output_folder.set(path)
@@ -150,145 +144,126 @@ def test_connection():
 
         conn.close()
 
-        messagebox.showinfo(
-            "Success",
-            "SQL Connection Successful."
-        )
+        messagebox.showinfo("Success", "SQL Connection Successful.")
 
     except Exception as e:
 
-        messagebox.showerror(
-            "Connection Failed",
-            str(e)
-        )
+        messagebox.showerror("Connection Failed", str(e))
 
 
 def validation_worker():
 
     try:
 
-        output_file = os.path.join(
-            output_folder.get(),
-            "DDR_Comparison_Result.xlsx"
-        )
+        root.after(0, lambda: status_text.set("Running Validation..."))
 
-        root.after(
-            0,
-            lambda: status_text.set("Running Validation...")
-        )
+        generated_files = []
 
-        from compare_ddr_aconex import main
+        # --------------------------------------------------
+        # Custom folder
+        # --------------------------------------------------
+        if save_to_custom.get():
 
-        main(
-            ddr_path=ddr_file.get(),
-            plip_path=plip_file.get(),
-            out_path=output_file
-        )
+            custom_output = os.path.join(
+                output_folder.get(), "DDR_Comparison_Result.xlsx"
+            )
 
-        root.after(
-            0,
-            lambda: status_text.set("Completed Successfully")
-        )
-        
+            main(
+                ddr_path=ddr_file.get(),
+                plip_path=plip_file.get(),
+                out_path=custom_output,
+            )
+
+            generated_files.append(custom_output)
+
+        # --------------------------------------------------
+        # Shared folder
+        # --------------------------------------------------
+        if save_to_shared.get():
+
+            shared_output = os.path.join(
+                SHARED_OUTPUT_FOLDER, "DDR_Comparison_Result.xlsx"
+            )
+
+            main(
+                ddr_path=ddr_file.get(),
+                plip_path=plip_file.get(),
+                out_path=shared_output,
+            )
+
+            generated_files.append(shared_output)
+
+        root.after(0, lambda: status_text.set("Completed Successfully"))
+
         root.after(0, progress.stop)
-        
+
         root.after(
             0,
             lambda: messagebox.showinfo(
                 "Success",
-                f"Output generated successfully:\n\n{output_file}"
-            )
+                "Output generated successfully:\n\n" + "\n".join(generated_files),
+            ),
         )
 
-        if os.path.exists(output_file):
-            os.startfile(output_file)
+        if generated_files:
+            os.startfile(generated_files[0])
 
     except Exception as e:
 
         error_msg = str(e)
 
-        root.after(
-            0,
-            lambda: status_text.set("Failed")
-        )
+        root.after(0, lambda: status_text.set("Failed"))
 
-        root.after(
-            0,
-            lambda msg=error_msg: messagebox.showerror(
-                "Error",
-                msg
-            )
-        )
+        root.after(0, lambda msg=error_msg: messagebox.showerror("Error", msg))
+
 
 def run_validation():
 
     if not ddr_file.get():
-        messagebox.showerror(
-            "Missing File",
-            "Please select a DDR file."
-        )
+        messagebox.showerror("Missing File", "Please select a DDR file.")
         return
 
     if not plip_file.get():
+        messagebox.showerror("Missing File", "Please select a PLIP file.")
+        return
+
+    if not save_to_custom.get() and not save_to_shared.get():
         messagebox.showerror(
-            "Missing File",
-            "Please select a PLIP file."
+            "Output Required", "Select at least one output destination."
         )
         return
 
-    if not output_folder.get():
-        messagebox.showerror(
-            "Missing Folder",
-            "Please select an output folder."
-        )
+    if save_to_custom.get() and not output_folder.get():
+        messagebox.showerror("Missing Folder", "Please select an output folder.")
         return
-    
+
     progress.start(10)
 
-    threading.Thread(
-        target=validation_worker,
-        daemon=True
-    ).start()
+    threading.Thread(target=validation_worker, daemon=True).start()
+
 
 def add_hover(widget, normal, hover):
 
-    widget.bind(
-        "<Enter>",
-        lambda e: widget.config(bg=hover)
-    )
+    widget.bind("<Enter>", lambda e: widget.config(bg=hover))
 
-    widget.bind(
-        "<Leave>",
-        lambda e: widget.config(bg=normal)
-    )
+    widget.bind("<Leave>", lambda e: widget.config(bg=normal))
+
+
 # ============================================================
 # INPUT FRAME
 # ============================================================
 
 main_frame = tk.Frame(
-    root,
-    bg=CARD,
-    padx=15,
-    pady=15,
-    highlightbackground="#3F3F46",
-    highlightthickness=1
+    root, bg=CARD, padx=15, pady=15, highlightbackground="#3F3F46", highlightthickness=1
 )
 
-main_frame.pack(
-    fill="x",
-    padx=20,
-    pady=10
-)
+main_frame.pack(fill="x", padx=20, pady=10)
 
 # DDR
 
-tk.Label(
-    main_frame,
-    text="DDR File",
-    font=("Segoe UI", 10),
-    bg=CARD,
-    fg=TEXT
-).grid(row=0, column=0, sticky="w", pady=10)
+tk.Label(main_frame, text="DDR File", font=("Segoe UI", 10), bg=CARD, fg=TEXT).grid(
+    row=0, column=0, sticky="w", pady=10
+)
 
 tk.Entry(
     main_frame,
@@ -297,51 +272,33 @@ tk.Entry(
     bg=ENTRY_BG,
     fg="white",
     insertbackground="white",
-    relief="flat"
+    relief="flat",
 ).grid(row=0, column=1, padx=10)
 
-create_button(
-    main_frame,
-    "Browse",
-    browse_ddr,
-    ACCENT
-).grid(row=0, column=2)
+create_button(main_frame, "Browse", browse_ddr, ACCENT).grid(row=0, column=2)
 
 # PLIP
 
-tk.Label(
-    main_frame,
-    text="PLIP File",
-    font=("Segoe UI", 10),
-    bg=CARD,
-    fg=TEXT
-).grid(row=1, column=0, sticky="w", pady=10)
+tk.Label(main_frame, text="PLIP File", font=("Segoe UI", 10), bg=CARD, fg=TEXT).grid(
+    row=1, column=0, sticky="w", pady=10
+)
 
 tk.Entry(
-main_frame,
+    main_frame,
     textvariable=plip_file,
     width=70,
     bg=ENTRY_BG,
     fg="white",
     insertbackground="white",
-    relief="flat"
+    relief="flat",
 ).grid(row=1, column=1, padx=10)
 
-create_button(
-    main_frame,
-    "Browse",
-    browse_plip,
-    ACCENT
-).grid(row=1, column=2)
+create_button(main_frame, "Browse", browse_plip, ACCENT).grid(row=1, column=2)
 
 # OUTPUT
 
 tk.Label(
-    main_frame,
-    text="Output Folder",
-    font=("Segoe UI", 10),
-    bg=CARD,
-    fg=TEXT
+    main_frame, text="Output Folder", font=("Segoe UI", 10), bg=CARD, fg=TEXT
 ).grid(row=2, column=0, sticky="w", pady=10)
 
 tk.Entry(
@@ -351,17 +308,36 @@ tk.Entry(
     bg=ENTRY_BG,
     fg="white",
     insertbackground="white",
-    relief="flat"
+    relief="flat",
 ).grid(row=2, column=1, padx=10)
 
-create_button(
+create_button(main_frame, "Browse", browse_output, ACCENT).grid(row=2, column=2)
+
+tk.Checkbutton(
     main_frame,
-    "Browse",
-    browse_output,
-    ACCENT
-).grid(row=2, column=2)
+    text="Save to Selected Folder",
+    variable=save_to_custom,
+    bg=CARD,
+    fg=TEXT,
+    selectcolor=ENTRY_BG,
+    activebackground=CARD,
+    activeforeground=TEXT,
+).grid(row=3, column=1, sticky="w", pady=5)
 
+tk.Checkbutton(
+    main_frame,
+    text="Save to Shared Reports Folder",
+    variable=save_to_shared,
+    bg=CARD,
+    fg=TEXT,
+    selectcolor=ENTRY_BG,
+    activebackground=CARD,
+    activeforeground=TEXT,
+).grid(row=4, column=1, sticky="w", pady=5)
 
+tk.Label(
+    main_frame, text=SHARED_OUTPUT_FOLDER, bg=CARD, fg="#AAAAAA", font=("Segoe UI", 8)
+).grid(row=5, column=1, sticky="w")
 # ============================================================
 # SQL BUTTON
 # ============================================================
@@ -376,7 +352,7 @@ sql_button = tk.Button(
     cursor="hand2",
     font=("Segoe UI", 10, "bold"),
     padx=15,
-    pady=8
+    pady=8,
 )
 
 sql_button.pack(pady=15)
@@ -384,17 +360,10 @@ sql_button.pack(pady=15)
 style = ttk.Style()
 style.theme_use("default")
 
-style.configure(
-    "blue.Horizontal.TProgressbar",
-    troughcolor=BG,
-    background=ACCENT
-)
+style.configure("blue.Horizontal.TProgressbar", troughcolor=BG, background=ACCENT)
 
 progress = ttk.Progressbar(
-    root,
-    style="blue.Horizontal.TProgressbar",
-    mode="indeterminate",
-    length=450
+    root, style="blue.Horizontal.TProgressbar", mode="indeterminate", length=450
 )
 
 progress.pack(pady=10)
@@ -402,27 +371,16 @@ progress.pack(pady=10)
 # STATUS
 # ============================================================
 
-status_frame = tk.Frame(
-    root,
-    bg=BG
-)
+status_frame = tk.Frame(root, bg=BG)
 
 status_frame.pack(pady=10)
 
 tk.Label(
-    status_frame,
-    text="Status:",
-    bg=BG,
-    fg=TEXT,
-    font=("Segoe UI", 10, "bold")
+    status_frame, text="Status:", bg=BG, fg=TEXT, font=("Segoe UI", 10, "bold")
 ).pack(side="left")
 
 tk.Label(
-    status_frame,
-    textvariable=status_text,
-    bg=BG,
-    fg="#00D7FF",
-    font=("Segoe UI", 10)
+    status_frame, textvariable=status_text, bg=BG, fg="#00D7FF", font=("Segoe UI", 10)
 ).pack(side="left", padx=5)
 
 # ============================================================
@@ -439,7 +397,7 @@ run_button = tk.Button(
     cursor="hand2",
     font=("Segoe UI", 12, "bold"),
     width=25,
-    height=2
+    height=2,
 )
 
 run_button.pack(pady=25)
@@ -456,7 +414,7 @@ footer = tk.Label(
     text="DDR / PLIP / ACONEX Validation Tool",
     bg=BG,
     fg="#808080",
-    font=("Segoe UI", 9)
+    font=("Segoe UI", 9),
 )
 
 footer.pack(side="bottom", pady=10)

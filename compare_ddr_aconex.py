@@ -65,6 +65,7 @@ from openpyxl.styles import Border, Side
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font, Alignment
 from openpyxl.utils import get_column_letter
+from datetime import datetime
 
 # ==========================================================================
 # CONFIG - EDIT THESE TO MATCH YOUR FILES
@@ -115,6 +116,14 @@ ACONEX_COL_TITLE = "Title"
 ACONEX_COL_REVIEW_STATUS = "ReviewStatus"
 ACONEX_COL_FILE_NAME = "FileName"
 
+# ==========================================================================
+# REFRESH LOG CONFIGURATION
+# ==========================================================================
+PROJECT_ID = "1342183550"
+ORG_ID = "1342190259"
+REPORT_CATEGORY = "DDR_Check"
+
+REFRESH_TABLE = "RefreshTime"
 # ==========================================================================
 # TAXONOMY RULES (Document Number = 7 dash-separated fields)
 # Area - ProcessUnit - Originator - Discipline - DocType - Sequential - Sheet
@@ -412,7 +421,7 @@ def load_aconex_from_sql():
         [{ACONEX_COL_REVIEW_STATUS}],
         [{ACONEX_COL_FILE_NAME}]
     FROM [{SQL_TABLE}]
-    WHERE [ProjectId] = '1342183550'
+    WHERE [ProjectId] = '{PROJECT_ID}'
     """
 
     try:
@@ -442,19 +451,110 @@ def load_aconex_from_sql():
     return df
 
 
+def insert_refresh_log():
+
+    conn_string = (
+        "DRIVER={ODBC Driver 18 for SQL Server};"
+        f"SERVER={SQL_SERVER};"
+        f"DATABASE={SQL_DATABASE};"
+        "Trusted_Connection=yes;"
+        "TrustServerCertificate=yes;"
+    )
+
+    query = f"""
+    IF EXISTS (
+        SELECT 1
+        FROM [{REFRESH_TABLE}]
+        WHERE
+            ProjectId = ?
+            AND ReportCategory = ?
+            AND OrgId = ?
+    )
+    BEGIN
+        UPDATE [{REFRESH_TABLE}]
+        SET [Last Refreshed] = ?
+        WHERE
+            ProjectId = ?
+            AND ReportCategory = ?
+            AND OrgId = ?
+    END
+    ELSE
+    BEGIN
+        INSERT INTO [{REFRESH_TABLE}]
+        (
+            [Last Refreshed],
+            ProjectId,
+            ReportCategory,
+            OrgId
+        )
+        VALUES (?, ?, ?, ?)
+    END
+    """
+
+    try:
+
+        conn = pyodbc.connect(conn_string)
+        cursor = conn.cursor()
+
+        now = datetime.now()
+
+        cursor.execute(
+            query,
+            # EXISTS
+            PROJECT_ID,
+            REPORT_CATEGORY,
+            ORG_ID,
+            # UPDATE
+            now,
+            PROJECT_ID,
+            REPORT_CATEGORY,
+            ORG_ID,
+            # INSERT
+            now,
+            PROJECT_ID,
+            REPORT_CATEGORY,
+            ORG_ID,
+        )
+
+        conn.commit()
+
+        cursor.close()
+        conn.close()
+
+        print(f"[Refresh Log] Successfully updated " f"{REPORT_CATEGORY}")
+
+    except Exception as e:
+        print(f"[Refresh Log] Failed to write refresh record: {e}")
+
+
 # ==========================================================================
 # MAIN
 # ==========================================================================
 
 STATUS_STYLES = {
+    "Missing Data": "FF9999",
     "OK - No Corrective Action Required": "C6EFCE",
     "Title Mismatch - Update Title in Aconex": "FFEB9C",
     "Placeholder Required - Create in Aconex": "FFD8A8",
     "Placeholder Required - INVALID Doc Number Taxonomy": "FFC7CE",
     "PLIP ID Not Found": "D9D9D9",
     "InActive PLIP ID": "FFF2CC",
-    "Delete from Aconex Document Register": "F4CCCC",
+    "Aconex Document Not Found in DDR": "F4CCCC",
 }
+
+
+def is_missing(value):
+    if pd.isna(value):
+        return True
+
+    return str(value).strip().upper() in {
+        "",
+        "-",
+        "--",
+        "N/A",
+        "NA",
+        "NULL",
+    }
 
 
 def main(ddr_path=None, plip_path=None, out_path=None):
@@ -484,6 +584,14 @@ def main(ddr_path=None, plip_path=None, out_path=None):
         "DDR",
         header_row=DDR_HEADER_ROW,
     )
+    ddr_df = ddr_df.dropna(
+        subset=[
+            DDR_COL_DOC_NUMBER,
+            DDR_COL_TITLE,
+            DDR_COL_PLIP_ID,
+        ],
+        how="all",
+    )
     plip_df = load_sheet(
         plip_path,
         PLIP_SHEET_NAME,
@@ -506,9 +614,16 @@ def main(ddr_path=None, plip_path=None, out_path=None):
             "review_status": row[ACONEX_COL_REVIEW_STATUS],
             "file_name": row[ACONEX_COL_FILE_NAME],
         }
-
+    ddr_df = ddr_df[
+        ~ddr_df[DDR_COL_DOC_NUMBER]
+        .astype(str)
+        .str.upper()
+        .str.contains(r"^[^-]+-[^-]+-[^-]+-ZV-", regex=True, na=False)
+    ]
     # Build a set of all document numbers currently present in the DDR
     ddr_doc_numbers = {norm(v) for v in ddr_df[DDR_COL_DOC_NUMBER] if norm(v)}
+
+    # Remove supplier documents (Discipline = ZV)
 
     results = []
 
@@ -517,14 +632,46 @@ def main(ddr_path=None, plip_path=None, out_path=None):
         title_raw = row[DDR_COL_TITLE]
         plip_id_raw = row[DDR_COL_PLIP_ID]
 
-        doc_number = str(doc_number_raw).strip() if pd.notna(doc_number_raw) else ""
-        title = str(title_raw).strip() if pd.notna(title_raw) else ""
-        plip_id = str(plip_id_raw).strip() if pd.notna(plip_id_raw) else ""
+        doc_number = "" if is_missing(doc_number_raw) else str(doc_number_raw).strip()
+        title = "" if is_missing(title_raw) else str(title_raw).strip()
+        plip_id = "" if is_missing(plip_id_raw) else str(plip_id_raw).strip()
 
         status = ""
         note = ""
         review_status = ""
         document_type = ""
+
+        # Check for missing required data
+        empty_fields = sum(
+            [
+                is_missing(doc_number),
+                is_missing(title),
+                is_missing(plip_id),
+            ]
+        )
+
+        if empty_fields >= 1:
+            status = "Missing Data"
+            note = (
+                f"Required fields missing. "
+                f"Document Number='{doc_number}', "
+                f"Title='{title}', "
+                f"PLIP ID='{plip_id}'"
+            )
+
+            results.append(
+                {
+                    "Document Number": doc_number,
+                    "Document Title (DDR)": title,
+                    "PLIP ID": plip_id,
+                    "Status": status,
+                    "Review Status": "",
+                    "Document Type": "",
+                    "Notes": note,
+                }
+            )
+
+            continue
 
         # Step 1 - PLIP check
 
@@ -602,23 +749,29 @@ def main(ddr_path=None, plip_path=None, out_path=None):
             }
         )
 
-    # ======================================================================
-    # STEP 5 - FIND DOCUMENTS THAT EXIST IN ACONEX BUT NOT IN DDR
-    # ======================================================================
-    #
-    # These documents are currently present in Aconex but are no longer
-    # present in the latest DDR.
-    #
-    # Therefore they should be reviewed for deletion from Aconex.
-    #
-    # IMPORTANT:
-    # This does NOT delete anything from Aconex.
-    # It only reports the document as requiring deletion.
-    # ======================================================================
+        # ======================================================================
+        # STEP 5 - FIND DOCUMENTS THAT EXIST IN ACONEX BUT NOT IN DDR
+        # ======================================================================
+        #
+        # These documents are currently present in Aconex but are no longer
+        # present in the latest DDR.
+        #
+        # Therefore they should be reviewed for deletion from Aconex.
+        #
+        # IMPORTANT:
+        # This does NOT delete anything from Aconex.
+        # It only reports the document as requiring deletion.
+        # ======================================================================
 
     for aconex_doc_number, aconex_record in aconex_lookup.items():
 
         if not aconex_doc_number:
+            continue
+
+        parts = aconex_doc_number.split("-")
+
+        # Ignore supplier documents
+        if len(parts) == 7 and parts[3].upper() == "ZV":
             continue
 
         # Document exists in Aconex but NOT in current DDR
@@ -644,7 +797,7 @@ def main(ddr_path=None, plip_path=None, out_path=None):
                     "Document Number": aconex_doc_number,
                     "Document Title (DDR)": "",
                     "PLIP ID": "",
-                    "Status": "Delete from Aconex Document Register",
+                    "Status": "Aconex Document Not Found in DDR",
                     "Review Status": review_status,
                     "Document Type": document_type,
                     "Notes": (
@@ -660,17 +813,18 @@ def main(ddr_path=None, plip_path=None, out_path=None):
     out_df.to_excel(out_path, index=False, sheet_name="DDR Comparison")
     create_summary_sheet(out_path)
     style_output(out_path)
-
+    insert_refresh_log()
     print(f"Done. {len(out_df)} documents processed.")
     print(f"Output written to: {out_path.resolve()}")
     all_statuses = [
+        "Missing Data",
         "OK - No Corrective Action Required",
         "Title Mismatch - Update Title in Aconex",
         "Placeholder Required - Create in Aconex",
         "Placeholder Required - INVALID Doc Number Taxonomy",
         "PLIP ID Not Found",
         "InActive PLIP ID",
-        "Delete from Aconex Document Register",
+        "Aconex Document Not Found in DDR",
     ]
 
     status_counts = out_df["Status"].value_counts()
@@ -737,13 +891,14 @@ def create_summary_sheet(path: Path):
     band_fill = PatternFill(start_color="F7F7F7", end_color="F7F7F7", fill_type="solid")
 
     SUMMARY_STATUS_COLORS = {
+        "Missing Data": "FF9999",
         "OK - No Corrective Action Required": "C6EFCE",
         "Title Mismatch - Update Title in Aconex": "FFEB9C",
         "Placeholder Required - Create in Aconex": "FFD8A8",
         "Placeholder Required - INVALID Doc Number Taxonomy": "FFC7CE",
         "PLIP ID Not Found": "D9D9D9",
         "InActive PLIP ID": "FFF2CC",
-        "Delete from Aconex Document Register": "F4CCCC",
+        "Aconex Document Not Found in DDR": "F4CCCC",
     }
 
     for idx, (status, count) in enumerate(sorted_statuses, start=start_row):
