@@ -96,7 +96,7 @@ HEADER_SCAN_ROWS = 25
 
 # --- Column names as they appear in row 1 of each file ---
 # DDR file
-DDR_COL_DOC_NUMBER = "DD Document/Drawing No"
+DDR_COL_DOC_NUMBER = "DDDocument/DrawingNo"
 DDR_COL_TITLE = "Title"
 DDR_COL_PLIP_ID = "PLIP ID"
 
@@ -263,6 +263,62 @@ def validate_taxonomy(doc_number: str):
 # ==========================================================================
 # HELPERS
 # ==========================================================================
+def get_doc_parts(doc_no):
+
+    try:
+
+        parts = str(doc_no).strip().split("-")
+
+        if len(parts) != 7:
+            return None
+
+        return {
+            "originator": parts[2],
+            "discipline": parts[3],
+            "doctype": parts[4],
+        }
+
+    except Exception:
+        return None
+
+
+def find_document_number_change_candidates(title, aconex_title_lookup, doc_number):
+
+    matches = aconex_title_lookup.get(norm(title), [])
+
+    if len(matches) == 0:
+        return None, None
+
+    if len(matches) == 1:
+        return "Document Number Changed", matches[0]
+
+    ddr_parts = get_doc_parts(doc_number)
+
+    if not ddr_parts:
+        return "Potential Document Number Change", matches
+
+    filtered = []
+
+    for candidate in matches:
+
+        candidate_parts = get_doc_parts(candidate["doc_no"])
+
+        if not candidate_parts:
+            continue
+
+        if (
+            candidate_parts["discipline"] == ddr_parts["discipline"]
+            and candidate_parts["doctype"] == ddr_parts["doctype"]
+        ):
+            filtered.append(candidate)
+
+    if len(filtered) == 1:
+        return "Document Number Changed", filtered[0]
+
+    if len(filtered) > 1:
+        return "Potential Document Number Change", filtered
+
+    return "Potential Document Number Change", matches
 
 
 def matches_doc_number_plip_pattern(doc_number, plip_id):
@@ -539,7 +595,9 @@ STATUS_STYLES = {
     "Placeholder Required - INVALID Doc Number Taxonomy": "FFC7CE",
     "PLIP ID Not Found": "D9D9D9",
     "InActive PLIP ID": "FFF2CC",
-    "Aconex Document Not Found in DDR": "F4CCCC",
+    "Document Number Changed": "B4C6E7",
+    "Potential Document Number Change": "C9DAF8",
+    "In Aconex Not DDR - Review Required": "F4CCCC",
 }
 
 
@@ -606,9 +664,16 @@ def main(ddr_path=None, plip_path=None, out_path=None):
 
     aconex_df["_key"] = aconex_df[ACONEX_COL_DOC_NUMBER].map(norm)
     aconex_lookup = {}
-
+    aconex_title_lookup = {}
     for _, row in aconex_df.iterrows():
+        title_key = norm(row[ACONEX_COL_TITLE])
 
+        aconex_title_lookup.setdefault(title_key, []).append(
+            {
+                "doc_no": norm(row[ACONEX_COL_DOC_NUMBER]),
+                "title": row[ACONEX_COL_TITLE],
+            }
+        )
         aconex_lookup[row["_key"]] = {
             "title": row[ACONEX_COL_TITLE],
             "review_status": row[ACONEX_COL_REVIEW_STATUS],
@@ -625,7 +690,8 @@ def main(ddr_path=None, plip_path=None, out_path=None):
 
     # Remove supplier documents (Discipline = ZV)
 
-    results = []
+    ddr_results = []
+    aconex_results = []
 
     for _, row in ddr_df.iterrows():
         doc_number_raw = row[DDR_COL_DOC_NUMBER]
@@ -659,10 +725,10 @@ def main(ddr_path=None, plip_path=None, out_path=None):
                 f"PLIP ID='{plip_id}'"
             )
 
-            results.append(
+            ddr_results.append(
                 {
                     "Document Number": doc_number,
-                    "Document Title (DDR)": title,
+                    "Document Title": title,
                     "PLIP ID": plip_id,
                     "Status": status,
                     "Review Status": "",
@@ -697,14 +763,57 @@ def main(ddr_path=None, plip_path=None, out_path=None):
         else:
             key = norm(doc_number)
             if key not in aconex_lookup:
-                # Step 3 - needs a placeholder -> validate taxonomy
-                is_valid, reason = validate_taxonomy(doc_number)
-                if is_valid:
-                    status = "Placeholder Required - Create in Aconex"
-                    note = "Not found in Aconex register; document number passes taxonomy check"
+
+                change_status, match_result = find_document_number_change_candidates(
+                    title,
+                    aconex_title_lookup,
+                    doc_number,
+                )
+
+                if change_status == "Document Number Changed":
+
+                    old_doc = match_result["doc_no"]
+
+                    status = "Document Number Changed"
+
+                    note = (
+                        f"DDR document number '{doc_number}' "
+                        f"appears to replace "
+                        f"Aconex document number '{old_doc}' "
+                        f"based on title matching."
+                    )
+
+                elif change_status == "Potential Document Number Change":
+
+                    status = "Potential Document Number Change"
+
+                    note = (
+                        "Multiple Aconex documents share "
+                        "the same title. "
+                        "Manual review required."
+                    )
+
                 else:
-                    status = "Placeholder Required - INVALID Doc Number Taxonomy"
-                    note = f"Not found in Aconex register; taxonomy issue: {reason}"
+
+                    is_valid, reason = validate_taxonomy(doc_number)
+
+                    if is_valid:
+
+                        status = "Placeholder Required - Create in Aconex"
+
+                        note = (
+                            "Not found in Aconex register; "
+                            "document number passes taxonomy check"
+                        )
+
+                    else:
+
+                        status = "Placeholder Required - INVALID Doc Number Taxonomy"
+
+                        note = (
+                            f"Not found in Aconex register; "
+                            f"taxonomy issue: {reason}"
+                        )
             else:
                 # Step 4 - exists -> compare titles
                 aconex_record = aconex_lookup[key]
@@ -737,10 +846,10 @@ def main(ddr_path=None, plip_path=None, out_path=None):
 
                     note = f"DDR title: '{title}' | " f"Aconex title: '{aconex_title}'"
 
-        results.append(
+        ddr_results.append(
             {
                 "Document Number": doc_number,
-                "Document Title (DDR)": title,
+                "Document Title": title,
                 "PLIP ID": plip_id,
                 "Status": status,
                 "Review Status": review_status,
@@ -792,29 +901,77 @@ def main(ddr_path=None, plip_path=None, out_path=None):
                 except Exception:
                     pass
 
-            results.append(
+            status = "In Aconex Not DDR - Review Required"
+            note = "Document exists in Aconex but not in DDR."
+
+            title_match_found = False
+            replacement_doc_no = ""
+
+            if aconex_title:
+
+                ddr_title_matches = ddr_df[
+                    ddr_df[DDR_COL_TITLE].astype(str).str.strip().str.upper()
+                    == str(aconex_title).strip().upper()
+                ]
+
+                if len(ddr_title_matches) > 0:
+
+                    title_match_found = True
+
+                    try:
+                        replacement_doc_no = str(
+                            ddr_title_matches.iloc[0][DDR_COL_DOC_NUMBER]
+                        ).strip()
+
+                    except Exception:
+                        replacement_doc_no = ""
+
+                if title_match_found:
+
+                    status = "Document Number Changed"
+
+                    note = f"Replaced in DDR by '{replacement_doc_no}'"
+
+            aconex_results.append(
                 {
                     "Document Number": aconex_doc_number,
-                    "Document Title (DDR)": "",
+                    "Document Title": aconex_title,
                     "PLIP ID": "",
-                    "Status": "Aconex Document Not Found in DDR",
+                    "Status": status,
                     "Review Status": review_status,
                     "Document Type": document_type,
-                    "Notes": (
-                        f"Document exists in Aconex but is not present in the latest DDR. "
-                        f"Aconex title: '{aconex_title}'"
-                    ),
+                    "Notes": note,
                 }
             )
 
-    out_df = pd.DataFrame(results)
+    ddr_df_out = pd.DataFrame(ddr_results)
+
+    aconex_df_out = pd.DataFrame(aconex_results)
 
     out_path = Path(out_path)
-    out_df.to_excel(out_path, index=False, sheet_name="DDR Comparison")
+
+    with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
+
+        ddr_df_out.to_excel(
+            writer,
+            sheet_name="DDR Results",
+            index=False,
+        )
+
+        aconex_df_out.to_excel(
+            writer,
+            sheet_name="In Aconex Not DDR",
+            index=False,
+        )
+
     create_summary_sheet(out_path)
     style_output(out_path)
     insert_refresh_log()
-    print(f"Done. {len(out_df)} documents processed.")
+    print(f"DDR Records: {len(ddr_df_out)}")
+
+    print(f"Aconex Records: {len(aconex_df_out)}")
+
+    print(f"Total Records: " f"{len(ddr_df_out)+len(aconex_df_out)}")
     print(f"Output written to: {out_path.resolve()}")
     all_statuses = [
         "Missing Data",
@@ -824,10 +981,17 @@ def main(ddr_path=None, plip_path=None, out_path=None):
         "Placeholder Required - INVALID Doc Number Taxonomy",
         "PLIP ID Not Found",
         "InActive PLIP ID",
-        "Aconex Document Not Found in DDR",
+        "Document Number Changed",
+        "Potential Document Number Change",
+        "In Aconex Not DDR - Review Required",
     ]
 
-    status_counts = out_df["Status"].value_counts()
+    combined_df = pd.concat(
+        [ddr_df_out, aconex_df_out],
+        ignore_index=True,
+    )
+
+    status_counts = combined_df["Status"].value_counts()
 
     print("\nStatus Summary")
     print("-" * 60)
@@ -859,9 +1023,22 @@ def create_summary_sheet(path: Path):
     # ==========================================================
     # READ DATA
     # ==========================================================
-    df = pd.read_excel(path, sheet_name="DDR Comparison")
+    ddr_df = pd.read_excel(path, sheet_name="DDR Results")
 
-    status_counts = df["Status"].value_counts().to_dict()
+    aconex_df = pd.read_excel(path, sheet_name="In Aconex Not DDR")
+
+    status_counts = {}
+
+    for source_df in [
+        ddr_df,
+        aconex_df,
+    ]:
+
+        source_counts = source_df["Status"].value_counts().to_dict()
+
+        for status, count in source_counts.items():
+
+            status_counts[status] = status_counts.get(status, 0) + count
 
     sorted_statuses = sorted(status_counts.items(), key=lambda x: x[1], reverse=True)
 
@@ -898,7 +1075,9 @@ def create_summary_sheet(path: Path):
         "Placeholder Required - INVALID Doc Number Taxonomy": "FFC7CE",
         "PLIP ID Not Found": "D9D9D9",
         "InActive PLIP ID": "FFF2CC",
-        "Aconex Document Not Found in DDR": "F4CCCC",
+        "Document Number Changed": "B4C6E7",
+        "Potential Document Number Change": "C9DAF8",
+        "In Aconex Not DDR - Review Required": "F4CCCC",
     }
 
     for idx, (status, count) in enumerate(sorted_statuses, start=start_row):
@@ -1022,41 +1201,67 @@ def create_summary_sheet(path: Path):
 def style_output(path: Path):
     """Colour-codes the Status column, bolds the header, and auto-fits columns."""
     wb = load_workbook(path)
-    ws = wb["DDR Comparison"]
 
     header_font = Font(bold=True, color="FFFFFF")
+
     header_fill = PatternFill(
         start_color="404040", end_color="404040", fill_type="solid"
     )
 
-    headers = [cell.value for cell in ws[1]]
-    status_col_idx = headers.index("Status") + 1 if "Status" in headers else None
+    for sheet_name in [
+        "DDR Results",
+        "In Aconex Not DDR",
+    ]:
 
-    for cell in ws[1]:
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws = wb[sheet_name]
 
-    if status_col_idx:
-        for row in ws.iter_rows(
-            min_row=2, min_col=status_col_idx, max_col=status_col_idx
-        ):
-            for cell in row:
-                color = STATUS_STYLES.get(cell.value)
-                if color:
-                    cell.fill = PatternFill(
-                        start_color=color, end_color=color, fill_type="solid"
-                    )
+        headers = [cell.value for cell in ws[1]]
 
-    # Auto-fit-ish column widths
-    for col_cells in ws.columns:
-        length = max(
-            (len(str(c.value)) if c.value is not None else 0) for c in col_cells
-        )
-        col_letter = get_column_letter(col_cells[0].column)
-        ws.column_dimensions[col_letter].width = min(max(length + 2, 12), 60)
+        status_col_idx = headers.index("Status") + 1 if "Status" in headers else None
 
-    ws.freeze_panes = "A2"
+        for cell in ws[1]:
+
+            cell.font = header_font
+
+            cell.fill = header_fill
+
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        if status_col_idx:
+
+            for row in ws.iter_rows(
+                min_row=2,
+                min_col=status_col_idx,
+                max_col=status_col_idx,
+            ):
+
+                for cell in row:
+
+                    color = STATUS_STYLES.get(cell.value)
+
+                    if color:
+
+                        cell.fill = PatternFill(
+                            start_color=color,
+                            end_color=color,
+                            fill_type="solid",
+                        )
+
+        for col_cells in ws.columns:
+
+            length = max(
+                (len(str(c.value)) if c.value is not None else 0) for c in col_cells
+            )
+
+            col_letter = get_column_letter(col_cells[0].column)
+
+            ws.column_dimensions[col_letter].width = min(
+                max(length + 2, 12),
+                60,
+            )
+
+        ws.freeze_panes = "A2"
+
     wb.save(path)
 
 
